@@ -8,6 +8,8 @@
 
 #include <grpc/byte_buffer_reader.h>
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 bool module_initialized = false;
 grpc_completion_queue *completion_queue;
@@ -225,60 +227,233 @@ int plugin_get_metadata(void *ptr, grpc_auth_metadata_context context,
                         const char **error_details) {
   static char error_details_buf[1024];
 
-  SV* callback = (SV*)ptr;
-  SV* err_tmp;
+  SV *callback_ref = (SV *)ptr;
+  SV *callback = NULL;
+  SV *err_tmp = NULL;
   int has_error = FALSE;
   char *error_details_out = NULL;
   grpc_metadata_array metadata;
 
+  int trace =
+    (getenv("GRPC_PERL_DEBUG_PLUGIN") != NULL) ||
+    (getenv("GRPC_PERL_DEBUG_SERVER") != NULL);
+
+#define PLUGIN_TRACE0(step)                                                   \
+  do {                                                                        \
+    if (trace) {                                                              \
+      fprintf(stderr, "[grpc-perl][plugin][trace] %s\n", (step));             \
+      fflush(stderr);                                                         \
+    }                                                                         \
+  } while (0)
+
+#define PLUGIN_TRACE(fmt, ...)                                                \
+  do {                                                                        \
+    if (trace) {                                                              \
+      fprintf(stderr, "[grpc-perl][plugin][trace] " fmt "\n", ##__VA_ARGS__); \
+      fflush(stderr);                                                         \
+    }                                                                         \
+  } while (0)
+
+  grpc_metadata_array_init(&metadata);
+
+  grpc_perl_debugf_plugin(
+      "get_metadata",
+      "enter ptr=%p service_url=%s method_name=%s",
+      ptr,
+      context.service_url ? context.service_url : "(null)",
+      context.method_name ? context.method_name : "(null)"
+  );
+
+  /*
+   * Временный режим полной изоляции от Perl API.
+   * Запускать так:
+   *   GRPC_PERL_PLUGIN_STATIC_OK=1 GRPC_PERL_DEBUG_SERVER=1 TEST_VERBOSE=1 make test TEST_FILES=t/01-call_credentials.t
+   *   GRPC_PERL_PLUGIN_STATIC_OK=1 GRPC_PERL_DEBUG_SERVER=1 TEST_VERBOSE=1 make test TEST_FILES=t/16-xs_secure_end_to_end.t
+   */
+  if (getenv("GRPC_PERL_PLUGIN_STATIC_OK") != NULL) {
+    PLUGIN_TRACE0("static_ok branch entered");
+
+    creds_md[0].key   = grpc_perl_slice_from_cstring("x-grpc-perl-debug");
+    creds_md[0].value = grpc_perl_slice_from_cstring("static-ok");
+
+    *num_creds_md = 1;
+    *status = GRPC_STATUS_OK;
+    *error_details = NULL;
+
+    grpc_perl_debugf_plugin("get_metadata", "static_ok success num_creds_md=1");
+
+    (void)cb;
+    (void)user_data;
+    return 1;
+  }
+
+  if (callback_ref == NULL) {
+    has_error = TRUE;
+    error_details_out = "plugin state is NULL";
+    goto finalize;
+  }
+
+  PLUGIN_TRACE("after callback_ref null-check ptr=%p", (void *)callback_ref);
+
+  if (!SvROK(callback_ref)) {
+    has_error = TRUE;
+    error_details_out = "plugin state is not a reference";
+    goto finalize;
+  }
+
+  PLUGIN_TRACE("after SvROK callback_ref=%p rv=%p",
+               (void *)callback_ref, (void *)SvRV(callback_ref));
+
+  if (SvTYPE(SvRV(callback_ref)) != SVt_PVCV) {
+    has_error = TRUE;
+    error_details_out = "plugin state does not contain a code reference";
+    goto finalize;
+  }
+
+  callback = SvRV(callback_ref);
+
+  grpc_perl_debugf_plugin(
+      "get_metadata",
+      "callback_ref=%p callback_cv=%p",
+      (void *)callback_ref,
+      (void *)callback
+  );
+
+  PLUGIN_TRACE0("before dSP");
   dSP;
+  PLUGIN_TRACE0("after dSP");
+
+  PLUGIN_TRACE0("before ENTER");
   ENTER;
+  PLUGIN_TRACE0("after ENTER");
 
-  HV* hash = newHV();
-  hv_stores(hash,"service_url", newSVpv(context.service_url,0));
-  hv_stores(hash,"method_name", newSVpv(context.method_name,0));
+  PLUGIN_TRACE0("before newHV");
+  HV *hash = newHV();
+  PLUGIN_TRACE("after newHV hash=%p", (void *)hash);
 
+  PLUGIN_TRACE0("before hv_stores service_url");
+  hv_stores(hash, "service_url",
+            newSVpv(context.service_url ? context.service_url : "", 0));
+  PLUGIN_TRACE0("after hv_stores service_url");
+
+  PLUGIN_TRACE0("before hv_stores method_name");
+  hv_stores(hash, "method_name",
+            newSVpv(context.method_name ? context.method_name : "", 0));
+  PLUGIN_TRACE0("after hv_stores method_name");
+
+  PLUGIN_TRACE0("before SAVETMPS");
   SAVETMPS;
+  PLUGIN_TRACE0("after SAVETMPS");
+
+  PLUGIN_TRACE0("before PUSHMARK");
   PUSHMARK(sp);
-  XPUSHs(sv_2mortal((SV*)newRV_noinc((SV*)hash)));
+  PLUGIN_TRACE0("after PUSHMARK");
+
+  PLUGIN_TRACE0("before newRV_noinc");
+  SV *hash_ref = newRV_noinc((SV *)hash);
+  PLUGIN_TRACE("after newRV_noinc hash_ref=%p", (void *)hash_ref);
+
+  PLUGIN_TRACE0("before XPUSHs");
+  XPUSHs(sv_2mortal(hash_ref));
+  PLUGIN_TRACE0("after XPUSHs");
+
+  PLUGIN_TRACE0("before PUTBACK");
   PUTBACK;
-  int count = perl_call_sv(callback, G_SCALAR|G_EVAL);
+  PLUGIN_TRACE0("after PUTBACK");
+
+  grpc_perl_debugf_plugin("get_metadata", "before perl_call_sv callback=%p", (void *)callback);
+  PLUGIN_TRACE("before perl_call_sv callback=%p", (void *)callback);
+
+  int count = perl_call_sv(callback, G_SCALAR | G_EVAL);
+
+  PLUGIN_TRACE("after perl_call_sv count=%d", count);
+  grpc_perl_debugf_plugin("get_metadata", "after perl_call_sv count=%d", count);
+
   SPAGAIN;
+  PLUGIN_TRACE0("after SPAGAIN");
 
   err_tmp = ERRSV;
+  PLUGIN_TRACE("after ERRSV err_tmp=%p svtrue=%d",
+               (void *)err_tmp, err_tmp ? (int)SvTRUE(err_tmp) : -1);
+
   if (SvTRUE(err_tmp)) {
     has_error = TRUE;
     my_strlcpy(error_details_buf, SvPV_nolen(err_tmp), sizeof(error_details_buf));
     error_details_out = error_details_buf;
-    POPs;
-  } else if (count!=1) {
+    if (count > 0) {
+      PLUGIN_TRACE0("before POPs on error");
+      POPs;
+      PLUGIN_TRACE0("after POPs on error");
+    }
+  }
+  else if (count != 1) {
     has_error = TRUE;
     error_details_out = "callback returned more/less than 1 value";
-    POPs;
-  } else {
-    SV* retval = POPs;
+    if (count > 0) {
+      PLUGIN_TRACE0("before POPs on bad count");
+      POPs;
+      PLUGIN_TRACE0("after POPs on bad count");
+    }
+  }
+  else {
+    PLUGIN_TRACE0("before POPs retval");
+    SV *retval = POPs;
+    PLUGIN_TRACE("after POPs retval=%p rok=%d type=%d",
+                 (void *)retval,
+                 (int)SvROK(retval),
+                 (int)SvTYPE(retval));
 
-    if (SvROK(retval)) {
-      if (!create_metadata_array((HV*)SvRV(retval), &metadata)) {
+    grpc_perl_debugf_plugin(
+        "get_metadata",
+        "retval=%p rok=%d type=%d",
+        (void *)retval,
+        (int)SvROK(retval),
+        (int)SvTYPE(retval)
+    );
+
+    if (SvROK(retval) && SvTYPE(SvRV(retval)) == SVt_PVHV) {
+      PLUGIN_TRACE("before create_metadata_array hv=%p", (void *)SvRV(retval));
+
+      if (!create_metadata_array((HV *)SvRV(retval), &metadata)) {
         has_error = TRUE;
         error_details_out = "callback returned invalid metadata";
         grpc_metadata_array_destroy(&metadata);
+        grpc_metadata_array_init(&metadata);
+      } else {
+        PLUGIN_TRACE("after create_metadata_array count=%lu", (unsigned long)metadata.count);
+        grpc_perl_debugf_plugin("get_metadata", "metadata.count=%lu",
+                                (unsigned long)metadata.count);
       }
-    } else {
+    }
+    else {
       has_error = TRUE;
-      error_details_out = "calback returned non-reference";
+      error_details_out = "callback returned non-hash-reference";
     }
   }
 
+  PLUGIN_TRACE0("before PUTBACK cleanup");
   PUTBACK;
-  FREETMPS;
-  LEAVE;
+  PLUGIN_TRACE0("after PUTBACK cleanup");
 
-  if ( has_error ) {
+  PLUGIN_TRACE0("before FREETMPS");
+  FREETMPS;
+  PLUGIN_TRACE0("after FREETMPS");
+
+  PLUGIN_TRACE0("before LEAVE");
+  LEAVE;
+  PLUGIN_TRACE0("after LEAVE");
+
+finalize:
+  if (has_error) {
+    grpc_perl_debugf_plugin("get_metadata", "error=%s",
+                            error_details_out ? error_details_out : "(null)");
+    PLUGIN_TRACE("finalize error=%s",
+                 error_details_out ? error_details_out : "(null)");
     *status = GRPC_STATUS_INVALID_ARGUMENT;
     *error_details = error_details_out;
     *num_creds_md = 0;
-  } else {
+  }
+  else {
     size_t i;
     for (i = 0; i < metadata.count && i < GRPC_METADATA_CREDENTIALS_PLUGIN_SYNC_MAX; i++) {
       creds_md[i] = metadata.metadata[i];
@@ -286,14 +461,24 @@ int plugin_get_metadata(void *ptr, grpc_auth_metadata_context context,
     *num_creds_md = metadata.count;
     *status = GRPC_STATUS_OK;
     *error_details = NULL;
+    grpc_perl_debugf_plugin("get_metadata", "success num_creds_md=%lu",
+                            (unsigned long)*num_creds_md);
+    PLUGIN_TRACE("finalize success num_creds_md=%lu",
+                 (unsigned long)*num_creds_md);
   }
 
   (void)cb;
   (void)user_data;
   return 1;
+
+#undef PLUGIN_TRACE
+#undef PLUGIN_TRACE0
 }
 
 void plugin_destroy_state(void *ptr) {
   SV *state = (SV *)ptr;
-  SvREFCNT_dec(state);
+  grpc_perl_debugf_plugin("destroy_state", "state=%p", ptr);
+  if (state != NULL) {
+    SvREFCNT_dec(state);
+  }
 }

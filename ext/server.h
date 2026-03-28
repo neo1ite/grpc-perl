@@ -5,6 +5,10 @@
 
 typedef struct {
   grpc_server *wrapped;
+  grpc_completion_queue *call_cq;
+  grpc_completion_queue *shutdown_cq;
+  int started;
+  int has_listener;
 } ServerCTX;
 
 typedef ServerCTX* Grpc__XS__Server;

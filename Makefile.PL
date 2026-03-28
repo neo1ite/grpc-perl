@@ -192,6 +192,27 @@ return p == NULL;
 EOT
 ) and ($EXTRA_DEFINES .= ' -DGRPC_PERL_HAS_SHUTDOWN_BLOCKING');
 
+_probe(
+    function => <<'EOT',
+int (*fn)(grpc_server*, const char*, grpc_server_credentials*) = grpc_server_add_http2_port;
+return fn == NULL;
+EOT
+) and ($EXTRA_DEFINES .= ' -DGRPC_PERL_HAS_SERVER_ADD_HTTP2_PORT');
+
+_probe(
+    function => <<'EOT',
+grpc_server_credentials *(*fn)(void) = grpc_insecure_server_credentials_create;
+return fn == NULL;
+EOT
+) and ($EXTRA_DEFINES .= ' -DGRPC_PERL_HAS_INSECURE_SERVER_CREDENTIALS_CREATE');
+
+_probe(
+    function => <<'EOT',
+grpc_server_credentials *(*fn)(const char*, grpc_ssl_pem_key_cert_pair*, size_t, grpc_ssl_client_certificate_request_type, void*) = grpc_ssl_server_credentials_create_ex;
+return fn == NULL;
+EOT
+) and ($EXTRA_DEFINES .= ' -DGRPC_PERL_HAS_SSL_SERVER_CREDENTIALS_CREATE_EX');
+
 _write_build_config_pm(
     server_experimental => $ENABLE_SERVER_EXPERIMENTAL,
 );
@@ -207,9 +228,10 @@ WriteMakefile(
     C                  => [ 'Grpc.c', 'util.c' ],
     OBJECT             => '$(O_FILES)',
     OPTIMIZE           => $DEBUG ? '-g' : '-O2',
-	PROTOTYPES         => 'DISABLE',
+    XSPROTOARG         => '-noprototypes',
     CONFIGURE_REQUIRES => {
-        'Devel::CheckLib' => 0,
+        'Devel::CheckLib'      => 0,
+        'ExtUtils::MakeMaker'  => 0,
     },
     META_MERGE => {
         resources => {

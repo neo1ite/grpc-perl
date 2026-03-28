@@ -2,10 +2,10 @@
 #define GRPC_PERL_CALL_H
 
 #include <grpc/grpc.h>
-#include <grpc/support/alloc.h>
 
 typedef struct {
   grpc_call *wrapped;
+  grpc_completion_queue *cq;
 } CallCTX;
 
 typedef CallCTX* Grpc__XS__Call;

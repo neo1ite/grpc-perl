@@ -8,8 +8,10 @@
 /pm_to_blib
 /XS.bs
 /Grpc.c
+/Grpc.xsc
 /MYMETA.*
 /Makefile
 /Makefile.old
 .vagrant
 /lib/Grpc/XS/BuildConfig.pm
+Grpc-XS-*.tar.gz
