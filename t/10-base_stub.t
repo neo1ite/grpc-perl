@@ -9,13 +9,13 @@ use_ok("Grpc::Client::BaseStub");
 use_ok("Grpc::XS::ChannelCredentials");
 
 my $credentials = Grpc::XS::ChannelCredentials::createInsecure();
-print STDERR Dumper($credentials);
+#print STDERR Dumper($credentials);
 
 my $stub = new Grpc::Client::BaseStub(
                 'localhost:50051',
                 credentials => $credentials,
                 timeout => 1000000 );
-print STDERR Dumper($stub);
+#print STDERR Dumper($stub);
 
 my $unmarshall = sub { return $_; };
 my $result = $stub->_simpleRequest(
@@ -24,4 +24,4 @@ my $result = $stub->_simpleRequest(
                    argument    => "testcall",
                    metadata    => undef,
                    options     => undef );
-print STDERR Dumper($result);
+#print STDERR Dumper($result);

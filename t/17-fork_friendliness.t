@@ -4,6 +4,13 @@ use Data::Dumper;
 use Test::More;
 use Devel::Peek;
 
+use Grpc::XS::BuildConfig ();
+
+BEGIN {
+    plan skip_all => 'server experimental is disabled in this build'
+        unless Grpc::XS::BuildConfig::SERVER_EXPERIMENTAL();
+}
+
 use Grpc::XS::Server;
 use Grpc::XS::Channel;
 use Grpc::XS::Call;

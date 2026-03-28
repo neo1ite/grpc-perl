@@ -2,6 +2,7 @@ Grpc.xs
 LICENSE
 MANIFEST
 Makefile.PL
+compat.h
 ppport.h
 README.md
 typemap

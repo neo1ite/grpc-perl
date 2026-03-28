@@ -10,8 +10,6 @@
 #include "ext/channel.h"
 #include "ext/channel_credentials.h"
 #include "ext/constants.h"
-#include "ext/server.h"
-#include "ext/server_credentials.h"
 #include "ext/timeval.h"
 
 MODULE = Grpc::XS    PACKAGE = Grpc::XS
@@ -43,12 +41,6 @@ INCLUDE: ext/channel_credentials.xs
 
 MODULE = Grpc::XS    PACKAGE = Grpc::XS::Constants
 INCLUDE: ext/constants.xs
-
-MODULE = Grpc::XS    PACKAGE = Grpc::XS::Server
-INCLUDE: ext/server.xs
-
-MODULE = Grpc::XS    PACKAGE = Grpc::XS::ServerCredentials
-INCLUDE: ext/server_credentials.xs
 
 MODULE = Grpc::XS    PACKAGE = Grpc::XS::Timeval
 INCLUDE: ext/timeval.xs

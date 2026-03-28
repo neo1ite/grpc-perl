@@ -6,24 +6,16 @@
 
 #include "util.h"
 
-#include <string.h>
-
-#include <grpc/grpc.h>
 #include <grpc/byte_buffer_reader.h>
-#if !defined(GRPC_VERSION_1_1)
-#include <grpc/support/slice.h>
-#else
-#include <grpc/slice.h>
-#endif
-#include <grpc/support/alloc.h>
+#include <string.h>
 
 bool module_initialized = false;
 grpc_completion_queue *completion_queue;
 
 grpc_byte_buffer *string_to_byte_buffer(char *string, size_t length) {
-  gpr_slice slice = gpr_slice_from_copied_buffer(string, length);
+  grpc_slice slice = grpc_slice_from_copied_buffer(string, length);
   grpc_byte_buffer *buffer = grpc_raw_byte_buffer_create(&slice, 1);
-  gpr_slice_unref(slice);
+  grpc_slice_unref(slice);
   return buffer;
 }
 
@@ -39,11 +31,11 @@ void byte_buffer_to_string(grpc_byte_buffer *buffer, char **out_string,
   size_t offset = 0;
   grpc_byte_buffer_reader reader;
   grpc_byte_buffer_reader_init(&reader, buffer);
-  gpr_slice next;
+  grpc_slice next;
   while (grpc_byte_buffer_reader_next(&reader, &next) != 0) {
-    memcpy(string + offset, GPR_SLICE_START_PTR(next), GPR_SLICE_LENGTH(next));
-    offset += GPR_SLICE_LENGTH(next);
-    gpr_slice_unref(next);
+    memcpy(string + offset, GRPC_SLICE_START_PTR(next), GRPC_SLICE_LENGTH(next));
+    offset += GRPC_SLICE_LENGTH(next);
+    grpc_slice_unref(next);
   }
   *out_string = string;
   *out_length = length;
@@ -63,7 +55,7 @@ void grpc_perl_destroy() {
     return;
   }
   grpc_perl_shutdown_completion_queue();
-#if defined(GRPC_HAS_SHUTDOWN_BLOCKING)
+#if defined(GRPC_PERL_HAS_SHUTDOWN_BLOCKING)
   grpc_shutdown_blocking();
 #else
   grpc_shutdown();
@@ -72,36 +64,28 @@ void grpc_perl_destroy() {
 }
 
 void grpc_perl_init_completion_queue() {
-#if defined(GRPC_VERSION_1_4)
+#if defined(GRPC_PERL_HAS_CQ_CREATE_FOR_PLUCK)
+  completion_queue = grpc_completion_queue_create_for_pluck(NULL);
+#else
   grpc_completion_queue_attributes attr;
-
   attr.version = 1;
   attr.cq_completion_type = GRPC_CQ_PLUCK;
   attr.cq_polling_type = GRPC_CQ_DEFAULT_POLLING;
-
-  completion_queue = grpc_completion_queue_create(grpc_completion_queue_factory_lookup(&attr), &attr, NULL);
-#else
-  completion_queue = grpc_completion_queue_create(NULL);
+  completion_queue = grpc_completion_queue_create(
+      grpc_completion_queue_factory_lookup(&attr), &attr, NULL);
 #endif
 }
 
 void grpc_perl_shutdown_completion_queue() {
   grpc_completion_queue_shutdown(completion_queue);
-#if defined(GRPC_VERSION_1_4)
   while (grpc_completion_queue_pluck(completion_queue, NULL,
                                      gpr_inf_future(GPR_CLOCK_REALTIME),
                                      NULL).type != GRPC_QUEUE_SHUTDOWN);
-#else
-  while (grpc_completion_queue_next(completion_queue,
-                                    gpr_inf_future(GPR_CLOCK_REALTIME),
-                                    NULL).type != GRPC_QUEUE_SHUTDOWN);
-#endif
   grpc_completion_queue_destroy(completion_queue);
   completion_queue = NULL;
 }
 
 void perl_grpc_read_args_array(HV *hash, grpc_channel_args *args) {
-  // handle hashes
   if (SvTYPE(hash)!=SVt_PVHV) {
     croak("Expected hash for perl_grpc_read_args_array() args");
   }
@@ -110,7 +94,6 @@ void perl_grpc_read_args_array(HV *hash, grpc_channel_args *args) {
   I32 keylen;
   SV* value;
 
-  // count items in hash
   args->num_args = 0;
   hv_iterinit(hash);
   while((value = hv_iternextsv(hash,&key,&keylen))!=NULL) {
@@ -139,64 +122,43 @@ void perl_grpc_read_args_array(HV *hash, grpc_channel_args *args) {
   }
 }
 
-/* Creates and returns a perl hash object with the data in a
- * grpc_metadata_array. Returns NULL on failure */
 HV* grpc_parse_metadata_array(grpc_metadata_array *metadata_array) {
   HV* hash = newHV();
   grpc_metadata *elements = metadata_array->metadata;
   grpc_metadata *elem;
 
-  // hash->{key} = [val]
   int i;
   int count = metadata_array->count;
   SV *inner_value;
-#if defined(GRPC_VERSION_1_2)
   SV *key;
   HE *temp_fetch;
-#else
-  SV **temp_fetch;
-#endif
+
   for (i = 0; i < count; i++) {
     elem = &elements[i];
-#if defined(GRPC_VERSION_1_2)
-    key = sv_2mortal(grpc_slice_to_sv(elem->key));
+    key = sv_2mortal(grpc_perl_sv_from_slice(elem->key));
     temp_fetch = hv_fetch_ent(hash, key, 0, 0);
     inner_value = temp_fetch ? HeVAL(temp_fetch) : NULL;
-#else
-    temp_fetch = hv_fetch(hash, elem->key, strlen(elem->key), 0);
-    inner_value = temp_fetch ? *temp_fetch : NULL;
-#endif
     if (inner_value) {
       if(!SvROK(inner_value)) {
         croak("Metadata hash somehow contains wrong types.");
         return NULL;
       }
-      av_push( (AV*)SvRV(inner_value), grpc_slice_or_buffer_length_to_sv(elem->value) );
+      av_push((AV*)SvRV(inner_value), grpc_slice_or_buffer_length_to_sv(elem->value));
     } else {
       AV* av = newAV();
-      av_push( av, grpc_slice_or_buffer_length_to_sv(elem->value) );
-#if defined(GRPC_VERSION_1_2)
-      hv_store_ent(hash,key,newRV_inc((SV*)av),0);
-#else
-      hv_store(hash,elem->key,strlen(elem->key),newRV_inc((SV*)av),0);
-#endif
+      av_push(av, grpc_slice_or_buffer_length_to_sv(elem->value));
+      hv_store_ent(hash, key, newRV_inc((SV*)av), 0);
     }
   }
 
   return hash;
 }
 
-/* Populates a grpc_metadata_array with the data in a perl hash object.
-   Returns TRUE on success and FALSE on failure.
-   Shouldn't use croak, as it is used in grpc callbacks, and everything explosed with a segfault.
- */
 bool create_metadata_array(HV *hash, grpc_metadata_array *metadata) {
-  // First thing to do is to make grpc_metadata_array_destroy() safe no matter what
   grpc_metadata_array_init(metadata);
   metadata->capacity = 0;
   metadata->metadata = NULL;
 
-  // handle hashes
   if (SvTYPE(hash)!=SVt_PVHV) {
     warn("Expected hash for create_metadata_array() args");
     return FALSE;
@@ -207,7 +169,6 @@ bool create_metadata_array(HV *hash, grpc_metadata_array *metadata) {
   I32 keylen;
   SV* value;
 
-  // count items in hash
   metadata->capacity = 0;
   hv_iterinit(hash);
   while((value = hv_iternextsv(hash,&key,&keylen))!=NULL) {
@@ -234,26 +195,17 @@ bool create_metadata_array(HV *hash, grpc_metadata_array *metadata) {
   hv_iterinit(hash);
   while((value = hv_iternextsv(hash,&key,&keylen))!=NULL) {
     if (!SvROK(value)) {
-      //warn("expected array ref in metadata value %s, ignoring...",key);
       continue;
     }
     value = SvRV(value);
     if (SvTYPE(value)!=SVt_PVAV) {
-      //warn("expected array ref in metadata value %s, ignoring...",key);
       continue;
     }
     for(i=0;i<av_len((AV*)value)+1;i++) {
       SV** inner_value = av_fetch((AV*)value,i,1);
       if (SvOK(*inner_value)) {
-#if defined(GRPC_VERSION_1_2)
-        metadata->metadata[metadata->count].key = grpc_slice_from_copied_string(key);
-        metadata->metadata[metadata->count].value =
-            grpc_slice_from_sv(*inner_value);
-#else
-        metadata->metadata[metadata->count].key = key;
-        metadata->metadata[metadata->count].value =
-            strdup(SvPV(*inner_value,metadata->metadata[metadata->count].value_length));
-#endif
+        metadata->metadata[metadata->count].key = grpc_perl_slice_from_cstring(key);
+        metadata->metadata[metadata->count].value = grpc_perl_slice_from_sv(*inner_value);
         metadata->count += 1;
       } else {
         warn("args values must be int or string");
@@ -265,19 +217,12 @@ bool create_metadata_array(HV *hash, grpc_metadata_array *metadata) {
   return TRUE;
 }
 
-/* Callback function for plugin creds API */
-#if defined(GRPC_VERSION_1_7)
 int plugin_get_metadata(void *ptr, grpc_auth_metadata_context context,
                         grpc_credentials_plugin_metadata_cb cb,
                         void *user_data,
                         grpc_metadata creds_md[GRPC_METADATA_CREDENTIALS_PLUGIN_SYNC_MAX],
                         size_t *num_creds_md, grpc_status_code *status,
                         const char **error_details) {
-#else
-void plugin_get_metadata(void *ptr, grpc_auth_metadata_context context,
-                         grpc_credentials_plugin_metadata_cb cb,
-                         void *user_data) {
-#endif
   static char error_details_buf[1024];
 
   SV* callback = (SV*)ptr;
@@ -313,7 +258,7 @@ void plugin_get_metadata(void *ptr, grpc_auth_metadata_context context,
   } else {
     SV* retval = POPs;
 
-    if (SvROK(retval)) { // create_metadata_array() segfaults without this check
+    if (SvROK(retval)) {
       if (!create_metadata_array((HV*)SvRV(retval), &metadata)) {
         has_error = TRUE;
         error_details_out = "callback returned invalid metadata";
@@ -329,41 +274,26 @@ void plugin_get_metadata(void *ptr, grpc_auth_metadata_context context,
   FREETMPS;
   LEAVE;
 
-  // TODO Documentation says that for GRPC_VERSION_1_7-style API a
-  // callback MUST be called from a different thread. This doesn't
-  // crash right now, but definitely should be fixed.
-  // GRPC_METADATA_CREDENTIALS_PLUGIN_SYNC_MAX is 4, so we can return
-  // up to that amount of metadata items synchronously.
   if ( has_error ) {
-    grpc_status_code code = GRPC_STATUS_INVALID_ARGUMENT;
-    cb(user_data, NULL, 0, code, error_details_out);
+    *status = GRPC_STATUS_INVALID_ARGUMENT;
+    *error_details = error_details_out;
+    *num_creds_md = 0;
   } else {
-    grpc_status_code code = GRPC_STATUS_OK;
-    cb(user_data, metadata.metadata, metadata.count, code, NULL);
+    size_t i;
+    for (i = 0; i < metadata.count && i < GRPC_METADATA_CREDENTIALS_PLUGIN_SYNC_MAX; i++) {
+      creds_md[i] = metadata.metadata[i];
+    }
+    *num_creds_md = metadata.count;
+    *status = GRPC_STATUS_OK;
+    *error_details = NULL;
   }
 
-#if defined(GRPC_VERSION_1_7)
-  return 0;
-#endif
+  (void)cb;
+  (void)user_data;
+  return 1;
 }
 
-/* Cleanup function for plugin creds API */
 void plugin_destroy_state(void *ptr) {
   SV *state = (SV *)ptr;
   SvREFCNT_dec(state);
 }
-
-#if defined(GRPC_VERSION_1_2)
-SV *grpc_slice_to_sv(grpc_slice slice) {
-  char *slice_str = grpc_slice_to_c_string(slice);
-  SV *sv = newSVpv(slice_str, GRPC_SLICE_LENGTH(slice));
-  gpr_free(slice_str);
-  return sv;
-}
-
-grpc_slice grpc_slice_from_sv(SV *sv) {
-  STRLEN length;
-  const char *buffer = SvPV(sv, length);
-  return grpc_slice_from_copied_buffer(buffer, length);
-}
-#endif

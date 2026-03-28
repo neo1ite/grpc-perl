@@ -8,6 +8,13 @@ use File::Basename;
 use File::Spec;
 my $path = File::Basename::dirname( File::Spec->rel2abs(__FILE__) );
 
+use Grpc::XS::BuildConfig ();
+
+BEGIN {
+    plan skip_all => 'server experimental is disabled in this build'
+        unless Grpc::XS::BuildConfig::SERVER_EXPERIMENTAL();
+}
+
 plan tests => 46;
 
 use_ok("Grpc::XS::CallCredentials");

@@ -39,10 +39,12 @@ L<Google::ProtocolBuffers::Dynamic>
 
 =cut
 
-our $VERSION = '0.38';
+our $VERSION = '0.39';
 
 XSLoader::load(__PACKAGE__, $VERSION );
 
-END { destroy(); }
+END {
+    Grpc::XS::destroy() if Grpc::XS->can('destroy');
+}
 
 1;

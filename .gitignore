@@ -12,3 +12,4 @@
 /Makefile
 /Makefile.old
 .vagrant
+/lib/Grpc/XS/BuildConfig.pm
